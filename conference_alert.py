@@ -7,7 +7,8 @@ Conference Deadline Alert Bot v6
 import requests
 import json
 import yaml
-from datetime import datetime
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 import os
 
 SLACK_WEBHOOK_URL = os.environ.get('SLACK_WEBHOOK_URL')
@@ -54,6 +55,58 @@ CATEGORY_MAP = {
     "DS": "System",
     "SE": "Software",
 }
+
+# 타임존 매핑 (ccfddl 형식 -> IANA 형식)
+TIMEZONE_MAP = {
+    "UTC-12": "Etc/GMT+12",  # AoE (Anywhere on Earth)
+    "AoE": "Etc/GMT+12",
+    "UTC-11": "Etc/GMT+11",
+    "UTC-10": "Etc/GMT+10",
+    "UTC-9": "Etc/GMT+9",
+    "UTC-8": "Etc/GMT+8",   # PST
+    "UTC-7": "Etc/GMT+7",   # PDT
+    "UTC-6": "Etc/GMT+6",
+    "UTC-5": "Etc/GMT+5",   # EST
+    "UTC-4": "Etc/GMT+4",
+    "UTC-3": "Etc/GMT+3",
+    "UTC-2": "Etc/GMT+2",
+    "UTC-1": "Etc/GMT+1",
+    "UTC": "UTC",
+    "UTC+0": "UTC",
+    "UTC+1": "Etc/GMT-1",
+    "UTC+2": "Etc/GMT-2",
+    "UTC+3": "Etc/GMT-3",
+    "UTC+4": "Etc/GMT-4",
+    "UTC+5": "Etc/GMT-5",
+    "UTC+6": "Etc/GMT-6",
+    "UTC+7": "Etc/GMT-7",
+    "UTC+8": "Etc/GMT-8",   # CST (China)
+    "UTC+9": "Etc/GMT-9",   # KST
+    "UTC+10": "Etc/GMT-10",
+    "UTC+11": "Etc/GMT-11",
+    "UTC+12": "Etc/GMT-12",
+}
+
+KST = ZoneInfo("Asia/Seoul")
+
+
+def convert_to_kst(deadline, timezone_str):
+    """deadline을 해당 타임존에서 KST로 변환"""
+    # 타임존 매핑
+    tz_str = TIMEZONE_MAP.get(timezone_str, "Etc/GMT+12")  # 기본값 AoE
+    
+    try:
+        tz = ZoneInfo(tz_str)
+    except:
+        tz = ZoneInfo("Etc/GMT+12")
+    
+    # deadline에 타임존 부여
+    deadline_with_tz = deadline.replace(tzinfo=tz)
+    
+    # KST로 변환
+    deadline_kst = deadline_with_tz.astimezone(KST)
+    
+    return deadline_kst
 
 
 def fetch_ccfddl_conference(sub, name):
@@ -125,9 +178,11 @@ def collect_conferences():
                     abstract_str = t.get('abstract_deadline')
                     abstract_date = parse_deadline(abstract_str)
                     if abstract_date:
+                        abstract_kst = convert_to_kst(abstract_date, timezone)
                         timelines.append({
                             'type': 'Abstract Registration',
                             'deadline': abstract_date,
+                            'deadline_kst': abstract_kst,
                             'comment': comment
                         })
                     
@@ -135,9 +190,11 @@ def collect_conferences():
                     paper_str = t.get('deadline')
                     paper_date = parse_deadline(paper_str)
                     if paper_date:
+                        paper_kst = convert_to_kst(paper_date, timezone)
                         timelines.append({
                             'type': 'Paper Submission',
                             'deadline': paper_date,
+                            'deadline_kst': paper_kst,
                             'comment': comment
                         })
                 
@@ -163,28 +220,28 @@ def collect_conferences():
 
 def get_upcoming_conferences(conferences):
     """현재 연도 + 다음 연도까지의 학회 필터링"""
-    today = datetime.now()
-    current_year = today.year
+    now_kst = datetime.now(KST)
+    current_year = now_kst.year
     next_year = current_year + 1
     upcoming = []
     
     for conf in conferences:
-        # 각 timeline의 days_left 계산
+        # 각 timeline의 days_left 계산 (KST 기준)
         future_timelines = []
         min_days_left = float('inf')
         
         for t in conf['timelines']:
-            deadline = t['deadline']
-            days_left = (deadline - today).days
+            deadline_kst = t['deadline_kst']
+            days_left = (deadline_kst - now_kst).days
             
             # 미래 deadline만 포함, 현재/다음 연도만
-            if days_left >= 0 and deadline.year <= next_year:
+            if days_left >= 0 and deadline_kst.year <= next_year:
                 t['days_left'] = days_left
                 future_timelines.append(t)
                 min_days_left = min(min_days_left, days_left)
         
         if future_timelines:
-            conf['timelines'] = sorted(future_timelines, key=lambda x: x['deadline'])
+            conf['timelines'] = sorted(future_timelines, key=lambda x: x['deadline_kst'])
             conf['min_days_left'] = min_days_left
             upcoming.append(conf)
     
@@ -258,9 +315,11 @@ def format_slack_message(conferences):
         
         # Timeline 하위 항목
         for t in conf['timelines']:
-            date_str = t['deadline'].strftime('%Y-%m-%d %H:%M')
+            # 원본 시간과 KST 시간 모두 표시
+            orig_str = t['deadline'].strftime('%Y-%m-%d %H:%M')
+            kst_str = t['deadline_kst'].strftime('%Y-%m-%d %H:%M')
             comment = f" ({t['comment']})" if t['comment'] else ""
-            lines.append(f"     • {t['type']}: {date_str} (D-{t['days_left']}){comment}")
+            lines.append(f"     • {t['type']}: {kst_str} KST (D-{t['days_left']}){comment}")
         
         return "\n".join(lines)
     
@@ -340,9 +399,10 @@ def main():
     print("\n--- Upcoming Conferences ---")
     for conf in upcoming:
         print(f"\n[{conf['category']}] {conf['name']} {conf['year']} (D-{conf['min_days_left']})")
-        print(f"  📍 {conf['place']} | 🗓️ {conf['date']}")
+        print(f"  📍 {conf['place']} | 🗓️ {conf['date']} | 🕐 {conf['timezone']}")
         for t in conf['timelines']:
-            print(f"  • {t['type']}: {t['deadline'].strftime('%Y-%m-%d')} (D-{t['days_left']})")
+            kst_str = t['deadline_kst'].strftime('%Y-%m-%d %H:%M')
+            print(f"  • {t['type']}: {kst_str} KST (D-{t['days_left']})")
     
     # Slack 메시지 생성 및 전송
     message = format_slack_message(upcoming)
