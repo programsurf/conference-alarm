@@ -254,6 +254,7 @@ def format_slack_message(conferences):
         lines.append(f"     📁 {conf['category']}")
         lines.append(f"     📍 {conf['place']}")
         lines.append(f"     🗓️ {conf['date']}")
+        lines.append(f"     🕐 {conf.get('timezone', 'UTC-12')}")
         
         # Timeline 하위 항목
         for t in conf['timelines']:
