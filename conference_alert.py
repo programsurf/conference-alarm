@@ -305,19 +305,14 @@ def format_slack_message(deadlines):
         
         if days_left <= 3:
             emoji = "🔴"
-            urgency = "D-DAY!" if days_left == 0 else f"D-{days_left}"
         elif days_left <= 7:
             emoji = "🟠"
-            urgency = f"D-{days_left}"
         elif days_left <= 14:
             emoji = "🟡"
-            urgency = f"D-{days_left}"
         elif days_left <= 60:
             emoji = "🟢"
-            urgency = f"D-{days_left}"
         else:
             emoji = "⚪"
-            urgency = f"D-{days_left}"
         
         conf_name = d['name']
         if d.get('link'):
@@ -326,11 +321,16 @@ def format_slack_message(deadlines):
         rank_info = f" (CCF-{d['ccf_rank']})" if d.get('ccf_rank') else ""
         
         # deadline type 표시
-        type_icon = "📝" if d.get('deadline_type') == 'abstract' else "📄"
-        comment = f" - {d['comment']}" if d.get('comment') else ""
+        if d.get('deadline_type') == 'abstract':
+            type_label = "Abstract Registration"
+        else:
+            type_label = "Paper Submission"
         
-        return f"{emoji} {type_icon} *{conf_name}*{rank_info}\n" \
-               f"     📁 {d['category']} | ⏰ {urgency} | 📆 {d['deadline'].strftime('%Y-%m-%d')}{comment}"
+        comment = f" | {d['comment']}" if d.get('comment') else ""
+        
+        return f"{emoji} *{conf_name}*{rank_info}\n" \
+               f"     📌 {type_label}\n" \
+               f"     📆 {d['deadline'].strftime('%Y-%m-%d %H:%M')} (D-{days_left}){comment}"
     
     # 🚨 긴급 (2달 이내)
     if urgent:
@@ -385,7 +385,7 @@ def format_slack_message(deadlines):
         "elements": [
             {
                 "type": "mrkdwn",
-                "text": f"📝=Abstract 📄=Paper | Updated: {datetime.now().strftime('%Y-%m-%d %H:%M')} KST"
+                "text": f"Updated: {datetime.now().strftime('%Y-%m-%d %H:%M')} KST | Source: ccfddl, sec-deadlines"
             }
         ]
     })
