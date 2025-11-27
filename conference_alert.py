@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Conference Deadline Alert Bot v4
-GitHub raw에서 직접 YAML 파일을 가져옴
+Conference Deadline Alert Bot v6
+학회별로 그룹화, 모든 deadline을 하위 항목으로 표시
 """
 
 import requests
@@ -46,7 +46,6 @@ CCFDDL_CONFERENCES = [
     ("DS", "sigmetrics"),
 ]
 
-# 카테고리 매핑
 CATEGORY_MAP = {
     "AI": "AI/Vision",
     "SC": "Security",
@@ -64,27 +63,11 @@ def fetch_ccfddl_conference(sub, name):
     try:
         response = requests.get(url, timeout=15)
         if response.status_code == 200:
-            data = yaml.safe_load(response.text)
-            return data
+            return yaml.safe_load(response.text)
     except Exception as e:
         print(f"[ccfddl] Error fetching {sub}/{name}: {e}")
     
     return None
-
-
-def fetch_sec_deadlines():
-    """sec-deadlines GitHub에서 학회 데이터 가져오기"""
-    url = "https://raw.githubusercontent.com/sec-deadlines/sec-deadlines.github.io/master/_data/conferences.yml"
-    
-    try:
-        response = requests.get(url, timeout=15)
-        if response.status_code == 200:
-            data = yaml.safe_load(response.text)
-            return data
-    except Exception as e:
-        print(f"[sec-deadlines] Error: {e}")
-    
-    return []
 
 
 def parse_deadline(deadline_str):
@@ -112,9 +95,9 @@ def parse_deadline(deadline_str):
     return None
 
 
-def collect_ccfddl_deadlines():
-    """ccfddl에서 모든 타겟 학회 데드라인 수집"""
-    deadlines = []
+def collect_conferences():
+    """ccfddl에서 학회 정보 수집 - 학회별로 그룹화"""
+    conferences = []
     
     for sub, name in CCFDDL_CONFERENCES:
         data = fetch_ccfddl_conference(sub, name)
@@ -126,160 +109,103 @@ def collect_ccfddl_deadlines():
             description = conf.get('description', '')
             rank = conf.get('rank', {}).get('ccf', '')
             
-            confs = conf.get('confs', [])
-            for cycle in confs:
+            for cycle in conf.get('confs', []):
                 year = cycle.get('year', '')
                 link = cycle.get('link', '')
                 place = cycle.get('place', 'TBA')
+                date = cycle.get('date', 'TBA')
+                timezone = cycle.get('timezone', 'UTC-12')
                 
-                timeline = cycle.get('timeline', [])
-                for t in timeline:
-                    # Abstract deadline 추가
+                # 모든 timeline을 하나의 리스트로
+                timelines = []
+                for t in cycle.get('timeline', []):
+                    comment = t.get('comment', '')
+                    
+                    # Abstract deadline
                     abstract_str = t.get('abstract_deadline')
                     abstract_date = parse_deadline(abstract_str)
                     if abstract_date:
-                        deadlines.append({
-                            'name': title,
-                            'full_name': description,
-                            'category': CATEGORY_MAP.get(sub, sub),
-                            'ccf_rank': rank,
-                            'year': year,
+                        timelines.append({
+                            'type': 'Abstract Registration',
                             'deadline': abstract_date,
-                            'deadline_str': abstract_str,
-                            'place': place,
-                            'link': link,
-                            'comment': f"Abstract - {t.get('comment', '')}".strip(' -'),
-                            'deadline_type': 'abstract',
-                            'source': 'ccfddl'
+                            'comment': comment
                         })
                     
                     # Paper deadline
-                    deadline_str = t.get('deadline')
-                    deadline_date = parse_deadline(deadline_str)
-                    if deadline_date:
-                        deadlines.append({
-                            'name': title,
-                            'full_name': description,
-                            'category': CATEGORY_MAP.get(sub, sub),
-                            'ccf_rank': rank,
-                            'year': year,
-                            'deadline': deadline_date,
-                            'deadline_str': deadline_str,
-                            'place': place,
-                            'link': link,
-                            'comment': t.get('comment', ''),
-                            'deadline_type': 'paper',
-                            'source': 'ccfddl'
+                    paper_str = t.get('deadline')
+                    paper_date = parse_deadline(paper_str)
+                    if paper_date:
+                        timelines.append({
+                            'type': 'Paper Submission',
+                            'deadline': paper_date,
+                            'comment': comment
                         })
+                
+                if timelines:
+                    conferences.append({
+                        'name': title,
+                        'full_name': description,
+                        'category': CATEGORY_MAP.get(sub, sub),
+                        'ccf_rank': rank,
+                        'year': year,
+                        'place': place,
+                        'date': date,
+                        'timezone': timezone,
+                        'link': link,
+                        'timelines': timelines,
+                        'source': 'ccfddl'
+                    })
         
         print(f"[ccfddl] Fetched {sub}/{name}")
     
-    return deadlines
+    return conferences
 
 
-def collect_sec_deadlines():
-    """sec-deadlines에서 데드라인 수집"""
-    deadlines = []
-    data = fetch_sec_deadlines()
-    
-    if not data:
-        return deadlines
-    
-    # 타겟 학회 필터
-    target_names = ['s&p', 'sp', 'oakland', 'ccs', 'usenix security', 'ndss', 
-                    'eurocrypt', 'crypto', 'esorics', 'dsn']
-    
-    for conf in data:
-        name = conf.get('name', '').lower()
-        
-        # 타겟 학회인지 확인
-        is_target = any(t in name for t in target_names)
-        if not is_target:
-            continue
-        
-        deadline_list = conf.get('deadline', [])
-        if isinstance(deadline_list, str):
-            deadline_list = [deadline_list]
-        
-        for dl in deadline_list:
-            # rolling deadline 처리
-            year = conf.get('year', datetime.now().year)
-            resolved = str(dl).replace('%y', str(year)).replace('%Y', str(int(year) - 1))
-            
-            deadline_date = parse_deadline(resolved)
-            if deadline_date:
-                deadlines.append({
-                    'name': conf.get('name', ''),
-                    'full_name': conf.get('description', ''),
-                    'category': 'Security',
-                    'ccf_rank': '',
-                    'year': year,
-                    'deadline': deadline_date,
-                    'deadline_str': resolved,
-                    'place': conf.get('place', 'TBA'),
-                    'link': conf.get('link', ''),
-                    'comment': '',
-                    'deadline_type': 'paper',
-                    'source': 'sec-deadlines'
-                })
-    
-    print(f"[sec-deadlines] Fetched {len(deadlines)} deadlines")
-    return deadlines
-
-
-def get_upcoming_deadlines(deadlines):
-    """현재 연도 + 다음 연도까지의 미래 데드라인 필터링"""
+def get_upcoming_conferences(conferences):
+    """현재 연도 + 다음 연도까지의 학회 필터링"""
     today = datetime.now()
     current_year = today.year
     next_year = current_year + 1
     upcoming = []
-    seen = set()
     
-    for d in deadlines:
-        deadline = d.get('deadline')
-        if not deadline:
-            continue
+    for conf in conferences:
+        # 각 timeline의 days_left 계산
+        future_timelines = []
+        min_days_left = float('inf')
         
-        deadline_year = deadline.year
-        days_left = (deadline - today).days
-        
-        # 과거가 아니고, 현재 연도 또는 다음 연도인 것만
-        if days_left >= 0 and deadline_year <= next_year:
-            # 중복 제거 (학회명 + 연도 + deadline)
-            key = f"{d['name'].lower()}_{deadline.strftime('%Y-%m-%d')}"
-            if key in seen:
-                continue
-            seen.add(key)
+        for t in conf['timelines']:
+            deadline = t['deadline']
+            days_left = (deadline - today).days
             
-            d['days_left'] = days_left
-            upcoming.append(d)
+            # 미래 deadline만 포함, 현재/다음 연도만
+            if days_left >= 0 and deadline.year <= next_year:
+                t['days_left'] = days_left
+                future_timelines.append(t)
+                min_days_left = min(min_days_left, days_left)
+        
+        if future_timelines:
+            conf['timelines'] = sorted(future_timelines, key=lambda x: x['deadline'])
+            conf['min_days_left'] = min_days_left
+            upcoming.append(conf)
     
-    upcoming.sort(key=lambda x: x['deadline'])
+    # 가장 빠른 deadline 기준 정렬
+    upcoming.sort(key=lambda x: x['min_days_left'])
     return upcoming
 
 
-def format_slack_message(deadlines):
-    """Slack 메시지 포맷팅 - 기간별 분류"""
+def format_slack_message(conferences):
+    """Slack 메시지 포맷팅 - 학회별 그룹화, 기간별 분류"""
     current_year = datetime.now().year
     
-    if not deadlines:
+    if not conferences:
         return {
             "text": f"📅 *Conference Deadline Alert*\n\n{current_year}-{current_year+1} 예정된 학회 데드라인이 없습니다."
         }
     
     # 기간별 분류
-    urgent = []      # 2달 이내 (60일)
-    upcoming = []    # 6달 이내 (180일)
-    later = []       # 12달 이상
-    
-    for d in deadlines:
-        days_left = d['days_left']
-        if days_left <= 60:
-            urgent.append(d)
-        elif days_left <= 180:
-            upcoming.append(d)
-        else:
-            later.append(d)
+    urgent = [c for c in conferences if c['min_days_left'] <= 60]
+    upcoming = [c for c in conferences if 60 < c['min_days_left'] <= 180]
+    later = [c for c in conferences if c['min_days_left'] > 180]
     
     blocks = [
         {
@@ -294,98 +220,79 @@ def format_slack_message(deadlines):
             "type": "section",
             "text": {
                 "type": "mrkdwn",
-                "text": f"*{current_year}-{current_year+1} 총 {len(deadlines)}개 데드라인*"
+                "text": f"*{current_year}-{current_year+1} 총 {len(conferences)}개 학회*"
             }
         },
         {"type": "divider"}
     ]
     
-    def format_deadline_entry(d):
-        days_left = d['days_left']
-        
+    def get_urgency_emoji(days_left):
         if days_left <= 3:
-            emoji = "🔴"
+            return "🔴"
         elif days_left <= 7:
-            emoji = "🟠"
+            return "🟠"
         elif days_left <= 14:
-            emoji = "🟡"
+            return "🟡"
         elif days_left <= 60:
-            emoji = "🟢"
+            return "🟢"
         else:
-            emoji = "⚪"
+            return "⚪"
+    
+    def format_conference(conf):
+        """학회 정보 포맷팅"""
+        emoji = get_urgency_emoji(conf['min_days_left'])
         
-        conf_name = d['name']
-        if d.get('link'):
-            conf_name = f"<{d['link']}|{d['name']}>"
-        
-        rank_info = f" (CCF-{d['ccf_rank']})" if d.get('ccf_rank') else ""
-        
-        # deadline type 표시
-        if d.get('deadline_type') == 'abstract':
-            type_label = "Abstract Registration"
+        # 학회명 (링크 포함)
+        if conf.get('link'):
+            conf_name = f"<{conf['link']}|{conf['name']} {conf['year']}>"
         else:
-            type_label = "Paper Submission"
+            conf_name = f"{conf['name']} {conf['year']}"
         
-        comment = f" | {d['comment']}" if d.get('comment') else ""
+        rank_info = f" (CCF-{conf['ccf_rank']})" if conf.get('ccf_rank') else ""
         
-        return f"{emoji} *{conf_name}*{rank_info}\n" \
-               f"     📌 {type_label}\n" \
-               f"     📆 {d['deadline'].strftime('%Y-%m-%d %H:%M')} (D-{days_left}){comment}"
+        lines = [f"{emoji} *{conf_name}*{rank_info}"]
+        lines.append(f"     📁 {conf['category']}")
+        lines.append(f"     📍 {conf['place']}")
+        lines.append(f"     🗓️ {conf['date']}")
+        
+        # Timeline 하위 항목
+        for t in conf['timelines']:
+            date_str = t['deadline'].strftime('%Y-%m-%d %H:%M')
+            comment = f" ({t['comment']})" if t['comment'] else ""
+            lines.append(f"     • {t['type']}: {date_str} (D-{t['days_left']}){comment}")
+        
+        return "\n".join(lines)
     
-    # 🚨 긴급 (2달 이내)
-    if urgent:
+    def add_section(title, conf_list):
+        if not conf_list:
+            return
+        
         blocks.append({
             "type": "section",
             "text": {
                 "type": "mrkdwn",
-                "text": f"*🚨 긴급 - 2달 이내 ({len(urgent)}개)*"
+                "text": f"*{title} ({len(conf_list)}개 학회)*"
             }
         })
-        for d in urgent:
+        
+        for conf in conf_list:
             blocks.append({
                 "type": "section",
-                "text": {"type": "mrkdwn", "text": format_deadline_entry(d)}
+                "text": {"type": "mrkdwn", "text": format_conference(conf)}
             })
+        
         blocks.append({"type": "divider"})
     
-    # 📌 다가오는 (6달 이내)
-    if upcoming:
-        blocks.append({
-            "type": "section",
-            "text": {
-                "type": "mrkdwn",
-                "text": f"*📌 다가오는 - 6달 이내 ({len(upcoming)}개)*"
-            }
-        })
-        for d in upcoming:
-            blocks.append({
-                "type": "section",
-                "text": {"type": "mrkdwn", "text": format_deadline_entry(d)}
-            })
-        blocks.append({"type": "divider"})
-    
-    # 📅 예정 (12달 이상)
-    if later:
-        blocks.append({
-            "type": "section",
-            "text": {
-                "type": "mrkdwn",
-                "text": f"*📅 예정 - 6달 이후 ({len(later)}개)*"
-            }
-        })
-        for d in later:
-            blocks.append({
-                "type": "section",
-                "text": {"type": "mrkdwn", "text": format_deadline_entry(d)}
-            })
-        blocks.append({"type": "divider"})
+    add_section("🚨 긴급 - 2달 이내", urgent)
+    add_section("📌 다가오는 - 6달 이내", upcoming)
+    add_section("📅 예정 - 6달 이후", later)
     
     blocks.append({
         "type": "context",
         "elements": [
             {
                 "type": "mrkdwn",
-                "text": f"Updated: {datetime.now().strftime('%Y-%m-%d %H:%M')} KST | Source: ccfddl, sec-deadlines"
+                "text": f"Updated: {datetime.now().strftime('%Y-%m-%d %H:%M')} KST | Source: ccfddl"
             }
         ]
     })
@@ -415,26 +322,26 @@ def send_slack_notification(message):
 
 def main():
     print("="*60)
-    print("Conference Deadline Alert Bot v4")
+    print("Conference Deadline Alert Bot v6")
     print(f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("="*60)
     
-    # 데드라인 수집
-    all_deadlines = []
-    all_deadlines.extend(collect_ccfddl_deadlines())
-    all_deadlines.extend(collect_sec_deadlines())
-    
-    print(f"\nTotal collected: {len(all_deadlines)}")
+    # 학회 정보 수집
+    conferences = collect_conferences()
+    print(f"\nTotal collected: {len(conferences)} conference cycles")
     
     # 필터링
-    upcoming = get_upcoming_deadlines(all_deadlines)
+    upcoming = get_upcoming_conferences(conferences)
     current_year = datetime.now().year
-    print(f"Upcoming deadlines ({current_year}-{current_year+1}): {len(upcoming)}")
+    print(f"Upcoming ({current_year}-{current_year+1}): {len(upcoming)} conferences")
     
     # 결과 출력
-    print("\n--- Upcoming Deadlines ---")
-    for d in upcoming:
-        print(f"  [{d['category']}] {d['name']}: {d['deadline'].strftime('%Y-%m-%d')} (D-{d['days_left']})")
+    print("\n--- Upcoming Conferences ---")
+    for conf in upcoming:
+        print(f"\n[{conf['category']}] {conf['name']} {conf['year']} (D-{conf['min_days_left']})")
+        print(f"  📍 {conf['place']} | 🗓️ {conf['date']}")
+        for t in conf['timelines']:
+            print(f"  • {t['type']}: {t['deadline'].strftime('%Y-%m-%d')} (D-{t['days_left']})")
     
     # Slack 메시지 생성 및 전송
     message = format_slack_message(upcoming)
