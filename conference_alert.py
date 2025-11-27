@@ -315,11 +315,11 @@ def format_slack_message(conferences):
         
         # Timeline 하위 항목
         for t in conf['timelines']:
-            # 원본 시간과 KST 시간 모두 표시
+            # KST 시간과 원본 시간 모두 표시
             orig_str = t['deadline'].strftime('%Y-%m-%d %H:%M')
             kst_str = t['deadline_kst'].strftime('%Y-%m-%d %H:%M')
             comment = f" ({t['comment']})" if t['comment'] else ""
-            lines.append(f"     • {t['type']}: {kst_str} KST (D-{t['days_left']}){comment}")
+            lines.append(f"     • {t['type']}: {kst_str} KST (D-{t['days_left']}) / {orig_str} {conf.get('timezone', '')}{comment}")
         
         return "\n".join(lines)
     
