@@ -38,21 +38,18 @@ CCFDDL_CONFERENCES = [
     ("NW", "sigcomm"),
     ("NW", "infocom"),
     ("NW", "nsdi"),
-    # Data/DB
-    ("DB", "sigmod"),
-    ("DB", "vldb"),
-    ("DB", "icde"),
-    ("DB", "kdd"),
-    # System
     ("DS", "sigmetrics"),
+    # Data
+    ("DB", "icdm"),
+    ("DB", "bigdata"),
 ]
 
 CATEGORY_MAP = {
     "AI": "AI/Vision",
     "SC": "Security",
     "NW": "Network",
+    "DS": "Network",
     "DB": "Data",
-    "DS": "System",
     "SE": "Software",
 }
 
