@@ -134,9 +134,28 @@ def collect_ccfddl_deadlines():
                 
                 timeline = cycle.get('timeline', [])
                 for t in timeline:
+                    # Abstract deadline 추가
+                    abstract_str = t.get('abstract_deadline')
+                    abstract_date = parse_deadline(abstract_str)
+                    if abstract_date:
+                        deadlines.append({
+                            'name': title,
+                            'full_name': description,
+                            'category': CATEGORY_MAP.get(sub, sub),
+                            'ccf_rank': rank,
+                            'year': year,
+                            'deadline': abstract_date,
+                            'deadline_str': abstract_str,
+                            'place': place,
+                            'link': link,
+                            'comment': f"Abstract - {t.get('comment', '')}".strip(' -'),
+                            'deadline_type': 'abstract',
+                            'source': 'ccfddl'
+                        })
+                    
+                    # Paper deadline
                     deadline_str = t.get('deadline')
                     deadline_date = parse_deadline(deadline_str)
-                    
                     if deadline_date:
                         deadlines.append({
                             'name': title,
@@ -149,6 +168,7 @@ def collect_ccfddl_deadlines():
                             'place': place,
                             'link': link,
                             'comment': t.get('comment', ''),
+                            'deadline_type': 'paper',
                             'source': 'ccfddl'
                         })
         
@@ -199,6 +219,7 @@ def collect_sec_deadlines():
                     'place': conf.get('place', 'TBA'),
                     'link': conf.get('link', ''),
                     'comment': '',
+                    'deadline_type': 'paper',
                     'source': 'sec-deadlines'
                 })
     
@@ -238,13 +259,27 @@ def get_upcoming_deadlines(deadlines):
 
 
 def format_slack_message(deadlines):
-    """Slack 메시지 포맷팅"""
+    """Slack 메시지 포맷팅 - 기간별 분류"""
     current_year = datetime.now().year
     
     if not deadlines:
         return {
             "text": f"📅 *Conference Deadline Alert*\n\n{current_year}-{current_year+1} 예정된 학회 데드라인이 없습니다."
         }
+    
+    # 기간별 분류
+    urgent = []      # 2달 이내 (60일)
+    upcoming = []    # 6달 이내 (180일)
+    later = []       # 12달 이상
+    
+    for d in deadlines:
+        days_left = d['days_left']
+        if days_left <= 60:
+            urgent.append(d)
+        elif days_left <= 180:
+            upcoming.append(d)
+        else:
+            later.append(d)
     
     blocks = [
         {
@@ -259,13 +294,13 @@ def format_slack_message(deadlines):
             "type": "section",
             "text": {
                 "type": "mrkdwn",
-                "text": f"*{current_year}-{current_year+1} 예정된 데드라인: {len(deadlines)}개*"
+                "text": f"*{current_year}-{current_year+1} 총 {len(deadlines)}개 데드라인*"
             }
         },
         {"type": "divider"}
     ]
     
-    for d in deadlines:
+    def format_deadline_entry(d):
         days_left = d['days_left']
         
         if days_left <= 3:
@@ -277,8 +312,11 @@ def format_slack_message(deadlines):
         elif days_left <= 14:
             emoji = "🟡"
             urgency = f"D-{days_left}"
-        else:
+        elif days_left <= 60:
             emoji = "🟢"
+            urgency = f"D-{days_left}"
+        else:
+            emoji = "⚪"
             urgency = f"D-{days_left}"
         
         conf_name = d['name']
@@ -286,26 +324,68 @@ def format_slack_message(deadlines):
             conf_name = f"<{d['link']}|{d['name']}>"
         
         rank_info = f" (CCF-{d['ccf_rank']})" if d.get('ccf_rank') else ""
-        comment = f"\n💬 {d['comment']}" if d.get('comment') else ""
         
+        # deadline type 표시
+        type_icon = "📝" if d.get('deadline_type') == 'abstract' else "📄"
+        comment = f" - {d['comment']}" if d.get('comment') else ""
+        
+        return f"{emoji} {type_icon} *{conf_name}*{rank_info}\n" \
+               f"     📁 {d['category']} | ⏰ {urgency} | 📆 {d['deadline'].strftime('%Y-%m-%d')}{comment}"
+    
+    # 🚨 긴급 (2달 이내)
+    if urgent:
         blocks.append({
             "type": "section",
             "text": {
                 "type": "mrkdwn",
-                "text": f"{emoji} *{conf_name}*{rank_info}\n"
-                        f"📁 {d['category']} | ⏰ {urgency}\n"
-                        f"📆 {d['deadline'].strftime('%Y-%m-%d %H:%M')} | 📍 {d.get('place', 'TBA')}"
-                        f"{comment}"
+                "text": f"*🚨 긴급 - 2달 이내 ({len(urgent)}개)*"
             }
         })
+        for d in urgent:
+            blocks.append({
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": format_deadline_entry(d)}
+            })
+        blocks.append({"type": "divider"})
     
-    blocks.append({"type": "divider"})
+    # 📌 다가오는 (6달 이내)
+    if upcoming:
+        blocks.append({
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"*📌 다가오는 - 6달 이내 ({len(upcoming)}개)*"
+            }
+        })
+        for d in upcoming:
+            blocks.append({
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": format_deadline_entry(d)}
+            })
+        blocks.append({"type": "divider"})
+    
+    # 📅 예정 (12달 이상)
+    if later:
+        blocks.append({
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"*📅 예정 - 6달 이후 ({len(later)}개)*"
+            }
+        })
+        for d in later:
+            blocks.append({
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": format_deadline_entry(d)}
+            })
+        blocks.append({"type": "divider"})
+    
     blocks.append({
         "type": "context",
         "elements": [
             {
                 "type": "mrkdwn",
-                "text": f"Updated: {datetime.now().strftime('%Y-%m-%d %H:%M')} KST"
+                "text": f"📝=Abstract 📄=Paper | Updated: {datetime.now().strftime('%Y-%m-%d %H:%M')} KST"
             }
         ]
     })
