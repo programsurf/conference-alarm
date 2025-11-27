@@ -1,179 +1,107 @@
 #!/usr/bin/env python3
 """
-Conference Deadline Alert Bot v2
-다중 소스에서 탑티어 학회 데드라인을 수집하여 Slack으로 알림
+Conference Deadline Alert Bot v4
+GitHub raw에서 직접 YAML 파일을 가져옴
 """
 
 import requests
 import json
-from datetime import datetime, timedelta
-from bs4 import BeautifulSoup
+import yaml
+from datetime import datetime
 import os
-import re
 
 SLACK_WEBHOOK_URL = os.environ.get('SLACK_WEBHOOK_URL')
 
-# 트래킹할 학회 목록 (소문자로 매칭용)
-TARGET_CONFERENCES = {
-    "AI/Vision": ["cvpr", "eccv", "iccv", "aaai", "icml", "iclr", "neurips", "nips"],
-    "Security": ["ieee s&p", "sp", "oakland", "ccs", "usenix security", "ndss", "eurocrypt", "crypto", "esorics", "dsn"],
-    "Network": ["sigmetrics", "infocom", "sigcomm", "nsdi", "imc"],
-    "Data": ["icdm", "bigdata", "kdd", "vldb", "sigmod"],
+# ccfddl에서 가져올 학회 목록 (카테고리/파일명)
+CCFDDL_CONFERENCES = [
+    # AI
+    ("AI", "cvpr"),
+    ("AI", "iccv"),
+    ("AI", "eccv"),
+    ("AI", "aaai"),
+    ("AI", "ijcai"),
+    ("AI", "icml"),
+    ("AI", "nips"),  # NeurIPS
+    ("AI", "iclr"),
+    # Security
+    ("SC", "sp"),      # IEEE S&P
+    ("SC", "ccs"),
+    ("SC", "uss"),     # USENIX Security
+    ("SC", "ndss"),
+    ("SC", "eurocrypt"),
+    ("SC", "crypto"),
+    ("SC", "asiacrypt"),
+    ("SC", "esorics"),
+    ("SC", "dsn"),
+    # Network
+    ("NW", "sigcomm"),
+    ("NW", "infocom"),
+    ("NW", "nsdi"),
+    # Data/DB
+    ("DB", "sigmod"),
+    ("DB", "vldb"),
+    ("DB", "icde"),
+    ("DB", "kdd"),
+    # System
+    ("DS", "sigmetrics"),
+]
+
+# 카테고리 매핑
+CATEGORY_MAP = {
+    "AI": "AI/Vision",
+    "SC": "Security",
+    "NW": "Network",
+    "DB": "Data",
+    "DS": "System",
+    "SE": "Software",
 }
 
 
-def fetch_from_aideadlines():
-    """aideadlin.es에서 AI 학회 데드라인 가져오기"""
-    deadlines = []
+def fetch_ccfddl_conference(sub, name):
+    """ccfddl GitHub에서 개별 학회 YAML 가져오기"""
+    url = f"https://raw.githubusercontent.com/ccfddl/ccf-deadlines/main/conference/{sub}/{name}.yml"
+    
     try:
-        url = "https://aideadlin.es/data/deadlines.json"
         response = requests.get(url, timeout=15)
         if response.status_code == 200:
-            data = response.json()
-            for conf in data:
-                deadlines.append({
-                    "name": conf.get("name", ""),
-                    "full_name": conf.get("full_name", ""),
-                    "deadline": conf.get("deadline", ""),
-                    "timezone": conf.get("timezone", "UTC"),
-                    "link": conf.get("link", ""),
-                    "place": conf.get("place", ""),
-                    "source": "aideadlines"
-                })
-            print(f"[aideadlines] Fetched {len(deadlines)} conferences")
+            data = yaml.safe_load(response.text)
+            return data
     except Exception as e:
-        print(f"[aideadlines] Error: {e}")
-    return deadlines
-
-
-def fetch_from_ccfddl():
-    """ccfddl (CCF Deadline) GitHub에서 데드라인 가져오기"""
-    deadlines = []
-    categories = ["AI", "security", "network", "database"]
+        print(f"[ccfddl] Error fetching {sub}/{name}: {e}")
     
-    for cat in categories:
-        try:
-            url = f"https://raw.githubusercontent.com/ccfddl/ccf-deadlines/main/conference/data/{cat}.yml"
-            response = requests.get(url, timeout=15)
-            if response.status_code == 200:
-                # 간단한 YAML 파싱 (정규식 사용)
-                content = response.text
-                confs = parse_simple_yaml(content)
-                for conf in confs:
-                    conf["source"] = "ccfddl"
-                    conf["ccf_category"] = cat
-                deadlines.extend(confs)
-                print(f"[ccfddl/{cat}] Fetched {len(confs)} conferences")
-        except Exception as e:
-            print(f"[ccfddl/{cat}] Error: {e}")
-    return deadlines
+    return None
 
 
-def parse_simple_yaml(content):
-    """간단한 YAML 파싱 (PyYAML 없이)"""
-    conferences = []
-    current_conf = {}
-    current_deadline = {}
-    in_deadline = False
+def fetch_sec_deadlines():
+    """sec-deadlines GitHub에서 학회 데이터 가져오기"""
+    url = "https://raw.githubusercontent.com/sec-deadlines/sec-deadlines.github.io/master/_data/conferences.yml"
     
-    for line in content.split('\n'):
-        line = line.rstrip()
-        
-        if line.startswith('- title:'):
-            if current_conf:
-                conferences.append(current_conf)
-            current_conf = {"name": line.split(':', 1)[1].strip().strip('"')}
-            current_deadline = {}
-            in_deadline = False
-            
-        elif line.strip().startswith('description:'):
-            current_conf["full_name"] = line.split(':', 1)[1].strip().strip('"')
-            
-        elif line.strip().startswith('sub:'):
-            current_conf["sub"] = line.split(':', 1)[1].strip()
-            
-        elif line.strip().startswith('rank:'):
-            current_conf["rank"] = line.split(':', 1)[1].strip()
-            
-        elif line.strip() == '- deadline:' or line.strip().startswith("- deadline: '"):
-            in_deadline = True
-            if "'" in line:
-                # inline deadline
-                match = re.search(r"deadline:\s*'([^']+)'", line)
-                if match:
-                    current_deadline["deadline"] = match.group(1)
-                    
-        elif in_deadline and line.strip().startswith("deadline:"):
-            match = re.search(r"deadline:\s*'([^']+)'", line)
-            if match:
-                current_deadline["deadline"] = match.group(1)
-                
-        elif in_deadline and line.strip().startswith("timezone:"):
-            current_deadline["timezone"] = line.split(':', 1)[1].strip()
-            
-        elif line.strip().startswith('link:'):
-            current_conf["link"] = line.split(':', 1)[1].strip()
-            
-        elif line.strip().startswith('place:'):
-            current_conf["place"] = line.split(':', 1)[1].strip().strip('"')
-            
-        elif line.strip().startswith('year:'):
-            current_conf["year"] = line.split(':', 1)[1].strip()
-    
-    if current_conf:
-        if current_deadline:
-            current_conf.update(current_deadline)
-        conferences.append(current_conf)
-    
-    return conferences
-
-
-def fetch_from_sec_deadlines():
-    """sec-deadlines에서 보안 학회 데드라인 가져오기"""
-    deadlines = []
     try:
-        url = "https://sec-deadlines.github.io/assets/data/conferences.json"
         response = requests.get(url, timeout=15)
         if response.status_code == 200:
-            data = response.json()
-            for conf in data:
-                deadlines.append({
-                    "name": conf.get("name", ""),
-                    "full_name": conf.get("full_name", ""),
-                    "deadline": conf.get("deadline", ""),
-                    "timezone": conf.get("timezone", "UTC"),
-                    "link": conf.get("link", ""),
-                    "place": conf.get("place", ""),
-                    "source": "sec-deadlines"
-                })
-            print(f"[sec-deadlines] Fetched {len(deadlines)} conferences")
+            data = yaml.safe_load(response.text)
+            return data
     except Exception as e:
         print(f"[sec-deadlines] Error: {e}")
-    return deadlines
+    
+    return []
 
 
-def parse_deadline(deadline_str, timezone="UTC"):
-    """다양한 데드라인 형식 파싱"""
+def parse_deadline(deadline_str):
+    """데드라인 문자열 파싱"""
     if not deadline_str:
         return None
     
-    # TBD, TBA 등 처리
-    if any(x in deadline_str.upper() for x in ["TBD", "TBA", "N/A"]):
+    clean_str = str(deadline_str).strip().replace("'", "").replace('"', '')
+    
+    if any(x in clean_str.upper() for x in ["TBD", "TBA", "N/A"]):
         return None
     
     formats = [
         "%Y-%m-%d %H:%M:%S",
         "%Y-%m-%d %H:%M",
         "%Y-%m-%d",
-        "%Y-%m-%dT%H:%M:%S",
-        "%B %d, %Y",
-        "%b %d, %Y",
-        "%d %B %Y",
-        "%d %b %Y",
     ]
-    
-    # 날짜 문자열 정리
-    clean_str = deadline_str.strip().replace("'", "").replace('"', '')
     
     for fmt in formats:
         try:
@@ -181,76 +109,101 @@ def parse_deadline(deadline_str, timezone="UTC"):
         except ValueError:
             continue
     
-    # ISO format 시도
-    try:
-        return datetime.fromisoformat(clean_str.replace('Z', '+00:00').split('+')[0])
-    except:
-        pass
-    
     return None
 
 
-def is_target_conference(conf_name, full_name=""):
-    """타겟 학회인지 확인하고 카테고리 반환"""
-    name_lower = conf_name.lower()
-    full_lower = full_name.lower() if full_name else ""
+def collect_ccfddl_deadlines():
+    """ccfddl에서 모든 타겟 학회 데드라인 수집"""
+    deadlines = []
     
-    for category, targets in TARGET_CONFERENCES.items():
-        for target in targets:
-            if target in name_lower or target in full_lower:
-                return category
-    return None
+    for sub, name in CCFDDL_CONFERENCES:
+        data = fetch_ccfddl_conference(sub, name)
+        if not data:
+            continue
+        
+        for conf in data:
+            title = conf.get('title', '')
+            description = conf.get('description', '')
+            rank = conf.get('rank', {}).get('ccf', '')
+            
+            confs = conf.get('confs', [])
+            for cycle in confs:
+                year = cycle.get('year', '')
+                link = cycle.get('link', '')
+                place = cycle.get('place', 'TBA')
+                
+                timeline = cycle.get('timeline', [])
+                for t in timeline:
+                    deadline_str = t.get('deadline')
+                    deadline_date = parse_deadline(deadline_str)
+                    
+                    if deadline_date:
+                        deadlines.append({
+                            'name': title,
+                            'full_name': description,
+                            'category': CATEGORY_MAP.get(sub, sub),
+                            'ccf_rank': rank,
+                            'year': year,
+                            'deadline': deadline_date,
+                            'deadline_str': deadline_str,
+                            'place': place,
+                            'link': link,
+                            'comment': t.get('comment', ''),
+                            'source': 'ccfddl'
+                        })
+        
+        print(f"[ccfddl] Fetched {sub}/{name}")
+    
+    return deadlines
 
 
-def collect_all_deadlines():
-    """모든 소스에서 데드라인 수집"""
-    all_deadlines = []
+def collect_sec_deadlines():
+    """sec-deadlines에서 데드라인 수집"""
+    deadlines = []
+    data = fetch_sec_deadlines()
     
-    # 각 소스에서 수집
-    all_deadlines.extend(fetch_from_aideadlines())
-    all_deadlines.extend(fetch_from_sec_deadlines())
-    all_deadlines.extend(fetch_from_ccfddl())
+    if not data:
+        return deadlines
     
-    # 필터링 및 정제
-    filtered = []
-    seen = set()
+    # 타겟 학회 필터
+    target_names = ['s&p', 'sp', 'oakland', 'ccs', 'usenix security', 'ndss', 
+                    'eurocrypt', 'crypto', 'esorics', 'dsn']
     
-    for conf in all_deadlines:
-        name = conf.get("name", "")
-        full_name = conf.get("full_name", "")
+    for conf in data:
+        name = conf.get('name', '').lower()
         
         # 타겟 학회인지 확인
-        category = is_target_conference(name, full_name)
-        if not category:
+        is_target = any(t in name for t in target_names)
+        if not is_target:
             continue
         
-        # 데드라인 파싱
-        deadline_str = conf.get("deadline", "")
-        deadline_date = parse_deadline(deadline_str, conf.get("timezone", "UTC"))
+        deadline_list = conf.get('deadline', [])
+        if isinstance(deadline_list, str):
+            deadline_list = [deadline_list]
         
-        if not deadline_date:
-            continue
-        
-        # 중복 제거 (학회명 + 연도)
-        year = deadline_date.year
-        key = f"{name.lower()}_{year}"
-        if key in seen:
-            continue
-        seen.add(key)
-        
-        filtered.append({
-            "name": name,
-            "full_name": full_name,
-            "category": category,
-            "deadline": deadline_date,
-            "deadline_str": deadline_str,
-            "place": conf.get("place", "TBA"),
-            "link": conf.get("link", ""),
-            "source": conf.get("source", "unknown"),
-        })
+        for dl in deadline_list:
+            # rolling deadline 처리
+            year = conf.get('year', datetime.now().year)
+            resolved = str(dl).replace('%y', str(year)).replace('%Y', str(int(year) - 1))
+            
+            deadline_date = parse_deadline(resolved)
+            if deadline_date:
+                deadlines.append({
+                    'name': conf.get('name', ''),
+                    'full_name': conf.get('description', ''),
+                    'category': 'Security',
+                    'ccf_rank': '',
+                    'year': year,
+                    'deadline': deadline_date,
+                    'deadline_str': resolved,
+                    'place': conf.get('place', 'TBA'),
+                    'link': conf.get('link', ''),
+                    'comment': '',
+                    'source': 'sec-deadlines'
+                })
     
-    print(f"Total filtered conferences: {len(filtered)}")
-    return filtered
+    print(f"[sec-deadlines] Fetched {len(deadlines)} deadlines")
+    return deadlines
 
 
 def get_upcoming_deadlines(deadlines):
@@ -259,16 +212,26 @@ def get_upcoming_deadlines(deadlines):
     current_year = today.year
     next_year = current_year + 1
     upcoming = []
+    seen = set()
     
     for d in deadlines:
-        if d['deadline']:
-            deadline_year = d['deadline'].year
-            days_left = (d['deadline'] - today).days
+        deadline = d.get('deadline')
+        if not deadline:
+            continue
+        
+        deadline_year = deadline.year
+        days_left = (deadline - today).days
+        
+        # 과거가 아니고, 현재 연도 또는 다음 연도인 것만
+        if days_left >= 0 and deadline_year <= next_year:
+            # 중복 제거 (학회명 + 연도 + deadline)
+            key = f"{d['name'].lower()}_{deadline.strftime('%Y-%m-%d')}"
+            if key in seen:
+                continue
+            seen.add(key)
             
-            # 과거가 아니고, 현재 연도 또는 다음 연도인 것만
-            if days_left >= 0 and deadline_year <= next_year:
-                d['days_left'] = days_left
-                upcoming.append(d)
+            d['days_left'] = days_left
+            upcoming.append(d)
     
     upcoming.sort(key=lambda x: x['deadline'])
     return upcoming
@@ -322,13 +285,17 @@ def format_slack_message(deadlines):
         if d.get('link'):
             conf_name = f"<{d['link']}|{d['name']}>"
         
+        rank_info = f" (CCF-{d['ccf_rank']})" if d.get('ccf_rank') else ""
+        comment = f"\n💬 {d['comment']}" if d.get('comment') else ""
+        
         blocks.append({
             "type": "section",
             "text": {
                 "type": "mrkdwn",
-                "text": f"{emoji} *{conf_name}*\n"
+                "text": f"{emoji} *{conf_name}*{rank_info}\n"
                         f"📁 {d['category']} | ⏰ {urgency}\n"
                         f"📆 {d['deadline'].strftime('%Y-%m-%d %H:%M')} | 📍 {d.get('place', 'TBA')}"
+                        f"{comment}"
             }
         })
     
@@ -338,7 +305,7 @@ def format_slack_message(deadlines):
         "elements": [
             {
                 "type": "mrkdwn",
-                "text": f"Updated: {datetime.now().strftime('%Y-%m-%d %H:%M')} KST | Sources: aideadlines, sec-deadlines, ccfddl"
+                "text": f"Updated: {datetime.now().strftime('%Y-%m-%d %H:%M')} KST"
             }
         ]
     })
@@ -367,20 +334,25 @@ def send_slack_notification(message):
 
 
 def main():
-    print("="*50)
-    print("Conference Deadline Alert Bot v2")
+    print("="*60)
+    print("Conference Deadline Alert Bot v4")
     print(f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    print("="*50)
+    print("="*60)
     
     # 데드라인 수집
-    deadlines = collect_all_deadlines()
+    all_deadlines = []
+    all_deadlines.extend(collect_ccfddl_deadlines())
+    all_deadlines.extend(collect_sec_deadlines())
     
-    # 현재 연도 + 다음 연도까지의 미래 데드라인
-    upcoming = get_upcoming_deadlines(deadlines)
+    print(f"\nTotal collected: {len(all_deadlines)}")
+    
+    # 필터링
+    upcoming = get_upcoming_deadlines(all_deadlines)
     current_year = datetime.now().year
     print(f"Upcoming deadlines ({current_year}-{current_year+1}): {len(upcoming)}")
     
     # 결과 출력
+    print("\n--- Upcoming Deadlines ---")
     for d in upcoming:
         print(f"  [{d['category']}] {d['name']}: {d['deadline'].strftime('%Y-%m-%d')} (D-{d['days_left']})")
     
