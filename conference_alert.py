@@ -288,16 +288,12 @@ def format_slack_message(conferences):
     ]
     
     def get_urgency_emoji(days_left):
-        if days_left <= 3:
+        if days_left <= 30:
             return "🔴"
-        elif days_left <= 7:
-            return "🟠"
-        elif days_left <= 14:
+        elif days_left <= 180:
             return "🟡"
-        elif days_left <= 60:
-            return "🟢"
         else:
-            return "⚪"
+            return "🟢"
     
     def format_conference(conf):
         """학회 정보 포맷팅"""
