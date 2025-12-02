@@ -257,8 +257,8 @@ def format_slack_message(conferences):
         }
     
     # 기간별 분류
-    urgent = [c for c in conferences if c['min_days_left'] <= 60]
-    upcoming = [c for c in conferences if 60 < c['min_days_left'] <= 180]
+    urgent = [c for c in conferences if c['min_days_left'] <= 30]
+    upcoming = [c for c in conferences if 30 < c['min_days_left'] <= 180]
     later = [c for c in conferences if c['min_days_left'] > 180]
     
     blocks = [
@@ -268,6 +268,13 @@ def format_slack_message(conferences):
                 "type": "plain_text",
                 "text": "📅 Conference Deadline Alert",
                 "emoji": True
+            }
+        },
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"🔴 긴급 (30일내): {len(urgent)}  |  🟡 임박 (6개월내): {len(upcoming)}  |  🟢 여유 (6개월+): {len(later)}"
             }
         },
         {
@@ -340,9 +347,9 @@ def format_slack_message(conferences):
         
         blocks.append({"type": "divider"})
     
-    add_section("🚨 긴급 - 2달 이내", urgent)
-    add_section("📌 다가오는 - 6달 이내", upcoming)
-    add_section("📅 예정 - 6달 이후", later)
+    add_section("🔴 긴급 (30일내)", urgent)
+    add_section("🟡 임박 (6개월내)", upcoming)
+    add_section("🟢 여유 (6개월+)", later)
     
     blocks.append({
         "type": "context",
@@ -412,4 +419,4 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    main()a
