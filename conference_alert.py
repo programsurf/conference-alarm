@@ -32,6 +32,7 @@ CCFDDL_CONFERENCES = [
     ("SC", "eurocrypt"),
     ("SC", "crypto"),
     ("SC", "asiacrypt"),
+    ("SC", "ches"),    # CHES/TCHES
     ("SC", "esorics"),
     ("SC", "dsn"),
     # Network
@@ -52,6 +53,16 @@ CATEGORY_MAP = {
     "DB": "Data",
     "SE": "Software",
 }
+
+# 목표 학회 (짝수일에 표시)
+TARGET_CONFERENCES = [
+    "CHES",
+    "TCHES",
+    "EUROCRYPT",
+    "ASIACRYPT",
+    "USENIX Security",
+    "IEEE S&P",
+]
 
 # 타임존 매핑 (ccfddl 형식 -> IANA 형식)
 TIMEZONE_MAP = {
@@ -247,6 +258,231 @@ def get_upcoming_conferences(conferences):
     return upcoming
 
 
+def filter_target_conferences(conferences):
+    """목표 학회만 필터링"""
+    target_names = [t.upper() for t in TARGET_CONFERENCES]
+    filtered = []
+
+    for conf in conferences:
+        conf_name = conf['name'].upper()
+        # 학회명이 목표 학회 목록에 포함되는지 확인
+        for target in target_names:
+            if target in conf_name or conf_name in target:
+                filtered.append(conf)
+                break
+
+    return filtered
+
+
+def format_slack_message_by_category(conferences):
+    """Slack 메시지 포맷팅 - 분야별 그룹화 (홀수일용)"""
+    current_year = datetime.now().year
+
+    if not conferences:
+        return {
+            "text": f"📅 *Conference Deadline Alert*\n\n{current_year}-{current_year+1} 예정된 학회 데드라인이 없습니다."
+        }
+
+    # 분야별 분류
+    by_category = {}
+    for conf in conferences:
+        cat = conf['category']
+        if cat not in by_category:
+            by_category[cat] = []
+        by_category[cat].append(conf)
+
+    blocks = [
+        {
+            "type": "header",
+            "text": {
+                "type": "plain_text",
+                "text": "📅 Conference Deadline Alert (분야별)",
+                "emoji": True
+            }
+        },
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"*{current_year}-{current_year+1} 총 {len(conferences)}개 학회* | 분야: {', '.join(by_category.keys())}"
+            }
+        },
+        {"type": "divider"}
+    ]
+
+    def get_urgency_emoji(days_left):
+        if days_left <= 30:
+            return "🔴"
+        elif days_left <= 180:
+            return "🟡"
+        else:
+            return "🟢"
+
+    def format_conference(conf):
+        emoji = get_urgency_emoji(conf['min_days_left'])
+
+        if conf.get('link'):
+            conf_name = f"<{conf['link']}|{conf['name']} {conf['year']}>"
+        else:
+            conf_name = f"{conf['name']} {conf['year']}"
+
+        rank_info = f" (CCF-{conf['ccf_rank']})" if conf.get('ccf_rank') else ""
+
+        lines = [f"{emoji} *{conf_name}*{rank_info}"]
+        lines.append(f"     📍 {conf['place']} | 🗓️ {conf['date']}")
+
+        for t in conf['timelines']:
+            kst_str = t['deadline_kst'].strftime('%Y-%m-%d %H:%M')
+            comment = f" ({t['comment']})" if t['comment'] else ""
+            lines.append(f"     • {t['type']}: {kst_str} KST (D-{t['days_left']}){comment}")
+
+        return "\n".join(lines)
+
+    # 분야별로 출력
+    category_order = ["Security", "AI/Vision", "Network", "Data", "Software"]
+    for cat in category_order:
+        if cat not in by_category:
+            continue
+
+        conf_list = sorted(by_category[cat], key=lambda x: x['min_days_left'])
+
+        blocks.append({
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"*📁 {cat} ({len(conf_list)}개)*"
+            }
+        })
+
+        for conf in conf_list:
+            blocks.append({
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": format_conference(conf)}
+            })
+
+        blocks.append({"type": "divider"})
+
+    blocks.append({
+        "type": "context",
+        "elements": [
+            {
+                "type": "mrkdwn",
+                "text": f"Updated: {datetime.now().strftime('%Y-%m-%d %H:%M')} KST | Source: ccfddl"
+            }
+        ]
+    })
+
+    return {"blocks": blocks}
+
+
+def format_slack_message_target(conferences):
+    """Slack 메시지 포맷팅 - 목표 학회용 (짝수일용)"""
+    current_year = datetime.now().year
+
+    if not conferences:
+        return {
+            "text": f"🎯 *Target Conference Alert*\n\n{current_year}-{current_year+1} 목표 학회 데드라인이 없습니다."
+        }
+
+    # 기간별 분류
+    urgent = [c for c in conferences if c['min_days_left'] <= 30]
+    upcoming = [c for c in conferences if 30 < c['min_days_left'] <= 180]
+    later = [c for c in conferences if c['min_days_left'] > 180]
+
+    blocks = [
+        {
+            "type": "header",
+            "text": {
+                "type": "plain_text",
+                "text": "🎯 Target Conference Alert",
+                "emoji": True
+            }
+        },
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"*목표 학회*: {', '.join(TARGET_CONFERENCES)}"
+            }
+        },
+        {
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"🔴 긴급 (30일내): {len(urgent)}  |  🟡 임박 (6개월내): {len(upcoming)}  |  🟢 여유 (6개월+): {len(later)}"
+            }
+        },
+        {"type": "divider"}
+    ]
+
+    def get_urgency_emoji(days_left):
+        if days_left <= 30:
+            return "🔴"
+        elif days_left <= 180:
+            return "🟡"
+        else:
+            return "🟢"
+
+    def format_conference(conf):
+        emoji = get_urgency_emoji(conf['min_days_left'])
+
+        if conf.get('link'):
+            conf_name = f"<{conf['link']}|{conf['name']} {conf['year']}>"
+        else:
+            conf_name = f"{conf['name']} {conf['year']}"
+
+        rank_info = f" (CCF-{conf['ccf_rank']})" if conf.get('ccf_rank') else ""
+
+        lines = [f"{emoji} *{conf_name}*{rank_info}"]
+        lines.append(f"     📍 {conf['place']}")
+        lines.append(f"     🗓️ {conf['date']}")
+        lines.append(f"     🕐 {conf.get('timezone', 'UTC-12')}")
+
+        for t in conf['timelines']:
+            orig_str = t['deadline'].strftime('%Y-%m-%d %H:%M')
+            kst_str = t['deadline_kst'].strftime('%Y-%m-%d %H:%M')
+            comment = f" ({t['comment']})" if t['comment'] else ""
+            lines.append(f"     • {t['type']}: {kst_str} KST (D-{t['days_left']}) / {orig_str} {conf.get('timezone', '')}{comment}")
+
+        return "\n".join(lines)
+
+    def add_section(title, conf_list):
+        if not conf_list:
+            return
+
+        blocks.append({
+            "type": "section",
+            "text": {
+                "type": "mrkdwn",
+                "text": f"*{title} ({len(conf_list)}개)*"
+            }
+        })
+
+        for conf in conf_list:
+            blocks.append({
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": format_conference(conf)}
+            })
+
+        blocks.append({"type": "divider"})
+
+    add_section("🔴 긴급 (30일내)", urgent)
+    add_section("🟡 임박 (6개월내)", upcoming)
+    add_section("🟢 여유 (6개월+)", later)
+
+    blocks.append({
+        "type": "context",
+        "elements": [
+            {
+                "type": "mrkdwn",
+                "text": f"Updated: {datetime.now().strftime('%Y-%m-%d %H:%M')} KST | Source: ccfddl"
+            }
+        ]
+    })
+
+    return {"blocks": blocks}
+
+
 def format_slack_message(conferences):
     """Slack 메시지 포맷팅 - 학회별 그룹화, 기간별 분류"""
     current_year = datetime.now().year
@@ -382,31 +618,53 @@ def send_slack_notification(message):
 
 def main():
     print("="*60)
-    print("Conference Deadline Alert Bot v6")
+    print("Conference Deadline Alert Bot v7")
     print(f"Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print("="*60)
-    
+
+    # 오늘 날짜 확인 (홀수일/짝수일)
+    today = datetime.now(KST)
+    is_odd_day = today.day % 2 == 1
+
+    if is_odd_day:
+        print(f"📅 오늘은 {today.day}일 (홀수일) - 분야별 전체 학회 알림")
+    else:
+        print(f"🎯 오늘은 {today.day}일 (짝수일) - 목표 학회 알림")
+
     # 학회 정보 수집
     conferences = collect_conferences()
     print(f"\nTotal collected: {len(conferences)} conference cycles")
-    
+
     # 필터링
     upcoming = get_upcoming_conferences(conferences)
     current_year = datetime.now().year
     print(f"Upcoming ({current_year}-{current_year+1}): {len(upcoming)} conferences")
-    
+
+    # 홀수일/짝수일에 따라 다른 처리
+    if is_odd_day:
+        # 홀수일: 분야별 전체 학회
+        display_conferences = upcoming
+        print("\n--- 분야별 전체 학회 ---")
+    else:
+        # 짝수일: 목표 학회만
+        display_conferences = filter_target_conferences(upcoming)
+        print(f"\n--- 목표 학회 ({len(display_conferences)}개) ---")
+        print(f"목표: {', '.join(TARGET_CONFERENCES)}")
+
     # 결과 출력
-    print("\n--- Upcoming Conferences ---")
-    for conf in upcoming:
+    for conf in display_conferences:
         print(f"\n[{conf['category']}] {conf['name']} {conf['year']} (D-{conf['min_days_left']})")
         print(f"  📍 {conf['place']} | 🗓️ {conf['date']} | 🕐 {conf['timezone']}")
         for t in conf['timelines']:
             kst_str = t['deadline_kst'].strftime('%Y-%m-%d %H:%M')
             print(f"  • {t['type']}: {kst_str} KST (D-{t['days_left']})")
-    
+
     # Slack 메시지 생성 및 전송
-    message = format_slack_message(upcoming)
-    
+    if is_odd_day:
+        message = format_slack_message_by_category(display_conferences)
+    else:
+        message = format_slack_message_target(display_conferences)
+
     if send_slack_notification(message):
         print("\n✅ Slack notification sent successfully!")
     else:
