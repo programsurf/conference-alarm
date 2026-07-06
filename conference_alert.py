@@ -15,7 +15,7 @@ SLACK_WEBHOOK_URL = os.environ.get('SLACK_WEBHOOK_URL')
 
 # ccfddl에서 가져올 학회 목록 (카테고리/파일명)
 CCFDDL_CONFERENCES = [
-    # AI
+    # AI - ML/Vision
     ("AI", "cvpr"),
     ("AI", "iccv"),
     ("AI", "eccv"),
@@ -24,17 +24,62 @@ CCFDDL_CONFERENCES = [
     ("AI", "icml"),
     ("AI", "nips"),  # NeurIPS
     ("AI", "iclr"),
+    ("AI", "aistats"),
+    ("AI", "colt"),
+    ("AI", "uai"),
+    ("AI", "accv"),
+    ("AI", "bmvc"),
+    ("AI", "wacv"),
+    ("AI", "icpr"),
+    # AI - NLP
+    ("AI", "acl"),
+    ("AI", "emnlp"),
+    ("AI", "naacl"),
+    ("AI", "eacl"),
+    ("AI", "coling"),
+    ("AI", "conll"),
+    ("AI", "ijcnlp"),
+    # AI - 기타 (에이전트/계획/진화)
+    ("AI", "aamas"),
+    ("AI", "ecai"),
+    ("AI", "icaps"),
+    ("AI", "kr"),
+    ("AI", "gecco"),
+    # AI - Robotics
+    ("AI", "icra"),
+    ("AI", "iros"),
+    ("AI", "rss"),
+    ("AI", "corl"),
+    # AI - 학제간 (ccfddl에서는 MX 카테고리)
+    ("MX", "miccai"),
+    ("MX", "mlsys"),
     # Security
     ("SC", "sp"),      # IEEE S&P
     ("SC", "ccs"),
     ("SC", "uss"),     # USENIX Security
     ("SC", "ndss"),
+    ("SC", "esorics"),
+    ("SC", "dsn"),
+    ("SC", "asiaccs"),
+    ("SC", "acsac"),
+    ("SC", "raid"),
+    ("SC", "eurosp"),  # EuroS&P
+    ("SC", "csfw"),    # CSF
+    ("SC", "codaspy"),
+    ("SC", "soups"),
+    ("SC", "pets"),    # PETS/PoPETs
+    ("SC", "wisec"),
+    ("SC", "sec"),     # IFIP SEC
+    # Crypto
     ("SC", "eurocrypt"),
     ("SC", "crypto"),
     ("SC", "asiacrypt"),
     ("SC", "ches"),    # CHES/TCHES
-    ("SC", "esorics"),
-    ("SC", "dsn"),
+    ("SC", "acns"),
+    ("SC", "fc"),      # Financial Cryptography
+    ("SC", "pkc"),
+    ("SC", "tcc"),
+    ("SC", "fse"),     # Fast Software Encryption
     # Network
     ("NW", "sigcomm"),
     ("NW", "infocom"),
@@ -42,7 +87,7 @@ CCFDDL_CONFERENCES = [
     ("DS", "sigmetrics"),
     # Data
     ("DB", "icdm"),
-    ("DB", "bigdata"),
+    ("MX", "bigdata"),
 ]
 
 CATEGORY_MAP = {
@@ -52,16 +97,22 @@ CATEGORY_MAP = {
     "DS": "Network",
     "DB": "Data",
     "SE": "Software",
+    "MX": "AI/Vision",  # miccai, mlsys
 }
 
-# 목표 학회 (짝수일에 표시)
+# 개별 학회 카테고리 오버라이드 (sub 기본 매핑과 다른 경우)
+CATEGORY_OVERRIDE = {
+    ("MX", "bigdata"): "Data",
+}
+
+# 목표 학회 (짝수일에 표시) - ccfddl title 기준 정확한 이름
 TARGET_CONFERENCES = [
-    "CHES",
-    "TCHES",
+    "CHES",            # CHES/TCHES
     "EUROCRYPT",
     "ASIACRYPT",
     "USENIX Security",
-    "IEEE S&P",
+    "S&P",             # IEEE S&P
+    "AsiaCCS",
 ]
 
 # 타임존 매핑 (ccfddl 형식 -> IANA 형식)
@@ -210,7 +261,7 @@ def collect_conferences():
                     conferences.append({
                         'name': title,
                         'full_name': description,
-                        'category': CATEGORY_MAP.get(sub, sub),
+                        'category': CATEGORY_OVERRIDE.get((sub, name), CATEGORY_MAP.get(sub, sub)),
                         'ccf_rank': rank,
                         'year': year,
                         'place': place,
@@ -260,18 +311,8 @@ def get_upcoming_conferences(conferences):
 
 def filter_target_conferences(conferences):
     """목표 학회만 필터링"""
-    target_names = [t.upper() for t in TARGET_CONFERENCES]
-    filtered = []
-
-    for conf in conferences:
-        conf_name = conf['name'].upper()
-        # 학회명이 목표 학회 목록에 포함되는지 확인
-        for target in target_names:
-            if target in conf_name or conf_name in target:
-                filtered.append(conf)
-                break
-
-    return filtered
+    target_names = {t.upper() for t in TARGET_CONFERENCES}
+    return [conf for conf in conferences if conf['name'].upper() in target_names]
 
 
 def format_slack_message_by_category(conferences):
@@ -596,16 +637,11 @@ def format_slack_message(conferences):
     return {"blocks": blocks}
 
 
-def send_slack_notification(message):
-    """Slack으로 메시지 전송"""
-    if not SLACK_WEBHOOK_URL:
-        print("SLACK_WEBHOOK_URL not set")
-        return False
-    
+def _post_to_slack(payload):
     try:
         response = requests.post(
             SLACK_WEBHOOK_URL,
-            json=message,
+            json=payload,
             headers={'Content-Type': 'application/json'}
         )
         if response.status_code != 200:
@@ -614,6 +650,22 @@ def send_slack_notification(message):
     except Exception as e:
         print(f"Error sending Slack notification: {e}")
         return False
+
+
+def send_slack_notification(message):
+    """Slack으로 메시지 전송 (메시지당 50블록 제한이 있어 초과 시 분할 전송)"""
+    if not SLACK_WEBHOOK_URL:
+        print("SLACK_WEBHOOK_URL not set")
+        return False
+
+    blocks = message.get('blocks')
+    if blocks and len(blocks) > 50:
+        ok = True
+        for i in range(0, len(blocks), 50):
+            ok = _post_to_slack({"blocks": blocks[i:i+50]}) and ok
+        return ok
+
+    return _post_to_slack(message)
 
 
 def main():
